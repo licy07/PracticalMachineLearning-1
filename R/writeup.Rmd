@@ -166,7 +166,7 @@ wlemodel_tree = train(classe ~ ., data = wletrainTransformed, method = 'rf',
 wlepredict_tree <- predict(wlemodel_tree, wletestTransformed)
 wleerrRate = missClass(wletestTransformed$classe, wlepredict_tree)
 ```
-Using the same `r repeats`x`r folds`-fold random forest approach as before, a accuracy of `r max(wlemodel_tree$results[,2])` was achieved, with an out of sample error of `r percent(wleerrRate)`. A plot of the variable importance is shown below.
+Using the same `r repeats`x`r folds`-fold random forest approach as before, an accuracy of `r percent(max(wlemodel_tree$results[,2]))` was achieved, with an out-of-sample error of `r percent(wleerrRate)`. A plot of the variable importance is shown below.
 ```{r, echo=FALSE}
 plot(varImp(wlemodel_tree))
 ```
