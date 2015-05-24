@@ -1,0 +1,176 @@
+---
+title: "Solving the Practical Machine Learning Prediction Assignment Two Ways"
+author: "Aaron 'Roon' Mayzes"
+date: "`r Sys.Date()`"
+output: html_document
+---
+```{r, cache=FALSE, echo=FALSE, results="hide", message=FALSE, warning=FALSE}
+set.seed(23)
+library(caret)
+library(grid)
+library(ggplot2)
+library(ipred)
+library(plyr)
+library(doMC)
+library(scales)
+```
+```{r, cache=TRUE, echo=FALSE, results="hide", message=FALSE, warning=FALSE}
+doMC::registerDoMC(cores=system(c('cat /proc/cpuinfo | grep processor | wc -l')))
+
+folds = 10
+repeats = 10
+p = 0.6
+
+
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+        library(grid)
+        
+        plots <- c(list(...), plotlist)
+        
+        numPlots = length(plots)
+        
+        if (is.null(layout)) {
+                layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                                 ncol = cols, nrow = ceiling(numPlots/cols))
+        }
+        
+        if (numPlots==1) {
+                print(plots[[1]])
+                
+        } else {
+                grid.newpage()
+                pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+                
+                for (i in 1:numPlots) {
+                        matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+                        
+                        print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                                        layout.pos.col = matchidx$col))
+                }
+        }
+}
+
+missClass = function(values, prediction) {
+        sum(prediction != values)/length(values)
+}
+
+pml_write_files = function(x){
+        n = length(x)
+        for(i in 1:n){
+                filename = paste0("problem_id_",i,".txt")
+                write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+        }
+}
+
+
+pml.training <- read.csv('../data/pml-training.csv')
+mydata <- pml.training
+y <- mydata[,160]
+mydata[,c(1,3:5,7:159)] <- lapply(mydata[,c(1,3:5,7:159)], as.numeric)
+
+
+mydata2 <- as.data.frame(predict(dummyVars(classe ~ user_name + new_window, mydata),mydata))
+mydata <- cbind(mydata2, mydata[,c(1,3:5,7:159)],y)
+mydata <- as.data.frame(lapply(mydata, function(x) ifelse(is.finite(x), x, NA)))
+a <- as.vector(colSums(is.na(mydata)) < 150)
+mydata <- mydata[,a]
+mydata <- mydata[complete.cases(mydata),]
+
+nzv <- nearZeroVar(mydata)
+mydata <- mydata[,-nzv]
+descrCor <-  cor(mydata)
+highlyCorDescr <- findCorrelation(descrCor, cutoff = .75)
+mydata <- mydata[,-highlyCorDescr]
+
+colnames(mydata)[length(colnames(mydata))] <- c("classe")
+mydata[,dim(mydata)[2]] <- as.factor(mydata[,dim(mydata)[2]])
+inTrain <- createDataPartition(y=mydata$classe,
+                               p=p, list=FALSE)
+
+training <- mydata[inTrain,]
+test <- mydata[-inTrain,]
+
+preObj <- preProcess(x=training[,1:(dim(training)[2]-1)], y=training[[,dim(training)[2]]], method = c("bagImpute"))
+trainTransformed <- predict(preObj, training)
+testTransformed <- predict(preObj, test)
+
+fitControl <- trainControl(## 10-fold CV
+        method = "repeatedcv",
+        number = folds,
+        ## repeated ten times
+        repeats = repeats)
+
+model_tree = train(classe ~ raw_timestamp_part_1 + user_name.carlitos + user_name.charles + user_name.jeremy, data = trainTransformed, method = 'rf',
+                   trControl = fitControl)
+predict_tree <- predict(model_tree, testTransformed[, 1:38])
+errRate = missClass(testTransformed$classe, predict_tree)
+```
+
+For Coursera’ s Machine Learning class, we were tasked with analyzing data from a weight lifting study. In the original study, subjects performed the Unilateral Dumbbell Biceps Curl in five different ways, and their biomechanics were captured from sensors on the dumbbell, their hand, upper arm, and waist. The original research team extended the raw data by adding calculated values (e.g. angles between sensors), as well as summary values (e.g. min, max, mean) over windows of time. The concept behind the study seemed to be that a system could detect that, say, a subject was not lifting the dumbbell high enough during their rep, and then could provide immediate feedback. Obviously, a curl which brings the dumbbell all the way up and a curl which brings the dumbbell only partly up are likely to be nearly identical during certain phases (e.g. when the dumbbell is lowered completely), and it is unsurprising that the important features identified by the original study were all summary features of blocks of time. To test properly a prediction model for this data, we would need additional blocks of time, each containing multiple raw measurements, for which the summary features could be calculated.
+
+Unfortunately, our project asked us to test against instantaneous samples. Without the correct format of test data, we should be unable to build a prediction model that is fit for the original use of the study. Fortunately for our grades, as the following graphs demonstrate, both subject name and time were captured ine the initial data collection, so we can determine completely from where in the initial data the test cases were sampled. 
+
+```{r, echo = FALSE}
+library(ggplot2)
+g <- ggplot(data=pml.training, aes(x=raw_timestamp_part_1, y=classe, color=classe)) + geom_point(shape=1)
+g2 <- g + facet_wrap( ~ user_name, ncol=3, scales="free_x") +
+        ggtitle("classe by time by user, independent scaling") +
+        scale_x_continuous(breaks=NULL)
+
+g1 <- g + facet_wrap( ~ user_name, ncol=3) +
+        ggtitle("classe by time by user, same scaling") +
+        scale_x_continuous(breaks=NULL)
+g1
+g2
+#multiplot(g1, g2, cols=1)
+```
+
+Due to this flaw in the data, we are able to predict successfully all of our final test cases with a basic prediction model, or even by hand. A random forest model with `r repeats`x`r folds`-fold repeated cross-validation, performed on a `r percent(p)` subsample, had a accuracy was `r max(model_tree$results[,2])`.  The out-of-sample error rate, as determined by the missClass function shown in class, was `r percent(errRate)`.
+
+```{r, echo=TRUE, eval=FALSE}
+missClass = function(values, prediction) {
+        sum(prediction != values)/length(values)
+}
+```
+Because of this flawed approach (more problems detailed at http://class.coursera.org/predmachlearn-014/forum/thread?thread_id=129), I decided to re-analyse the original data from the study, independent of the goal of predicting the course project test set.
+
+```{r, echo=FALSE, results="hide", message=FALSE, warning=FALSE}
+wle <- read.csv('../data/WearableComputing_weight_lifting_exercises_biceps_curl_variations.csv')
+wle <- as.data.frame(lapply(wle, as.numeric))
+wle <- wle[complete.cases(wle),grep("total|kurtosis|skewness|max|min|amplitude|classe", names(wle), value=TRUE)]
+wlenzv <- nearZeroVar(wle)
+wle <- wle[,-wlenzv]
+wledescrCor <-  cor(wle)
+wlehighlyCorDescr <- findCorrelation(wledescrCor, cutoff = .75)
+wle <- wle[,-wlehighlyCorDescr]
+colnames(wle)[length(colnames(wle))] <- c("classe")
+wle[,dim(wle)[2]] <- as.factor(wle[,dim(wle)[2]])
+
+```
+
+I dropped all user, timestamp, and window data, as well as all sensor data which was not a summary measure. This left us with a data set of `r dim(wle)[1]` observations of `r dim(wle)[2]` variables, which was divided into a `r percent(p)` training set, with the remainder for testing.
+
+```{r, echo=FALSE, results="hide", message=FALSE, warning=FALSE}
+wleinTrain <- createDataPartition(y=wle$classe,
+                               p=p, list=FALSE)
+
+wletraining <- wle[wleinTrain,]
+wletest <- wle[-wleinTrain,]
+
+wlepreObj <- preProcess(x=wletraining[,1:(dim(wletraining)[2]-1)], y=wletraining[[,dim(wletraining)[2]]], method = c("bagImpute"))
+wletrainTransformed <- predict(wlepreObj, wletraining)
+wletestTransformed <- predict(wlepreObj, wletest)
+
+wlemodel_tree = train(classe ~ ., data = wletrainTransformed, method = 'rf',
+                   trControl = fitControl)
+wlepredict_tree <- predict(wlemodel_tree, wletestTransformed)
+wleerrRate = missClass(wletestTransformed$classe, wlepredict_tree)
+```
+Using the same `r repeats`x`r folds`-fold random forest approach as before, a accuracy of `r max(wlemodel_tree$results[,2])` was achieved, with an out of sample error of `r percent(wleerrRate)`. A plot of the variable importance is shown below.
+```{r, echo=FALSE}
+plot(varImp(wlemodel_tree))
+```
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz3aDfLOyAo
